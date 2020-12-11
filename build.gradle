@@ -1,0 +1,580 @@
+import com.successfactors.learning.buildsystem.adf.tools.tasks.GenerateADFCatalogTask
+import com.successfactors.learning.buildsystem.aep.tasks.RunADFTestsMultipleModulesTask
+import com.successfactors.learning.buildsystem.aep.tasks.RunADFTestsSingleModuleTask
+import org.apache.tools.ant.taskdefs.condition.Os
+
+/**
+ * This block specifies which plugins and task classes are available for the buildscript itself, i.e. build.gradle
+ */
+buildscript {
+  apply from: "gradle/scripts/repositories.gradle", to: buildscript
+  repositories {
+    maven {
+      url "http://nexus.wdf.sap.corp:8081/nexus/content/repositories/build.releases.3rd-party"
+    }
+  }
+  dependencies {
+    // Dependencies specified in buildscript block are visible to subprojects
+    // Check plug-in version here:
+    // https://github.wdf.sap.corp/gbs/bizx-applicationtest/blob/master/gradle.properties
+    // classpath 'com.successfactors.buildsystem:bizx-applicationtest:b1911.0.15'
+  }
+}
+
+plugins {
+  id "com.github.dkorotych.gradle-maven-exec" version "2.2"
+}
+
+apply from: "gradle/dependencies.gradle"
+
+apply plugin: "java"
+apply plugin: "java-library"
+apply plugin: 'maven'
+
+
+configurations {
+  all {
+    resolutionStrategy.force "xml-apis:xml-apis:1.4.01"
+  }
+}
+
+def getBuildStartTime() {
+  return ((System.getenv("BUILD_START_TIME") != null) ? System.getenv("BUILD_START_TIME") : new Date())
+}
+
+def getbuildVersionWithoutMinorVersion() {
+  def pv = ext.project_version
+  def build_version = pv.substring(0, pv.indexOf(".", pv.indexOf(".") + 1))
+  return build_version
+}
+
+def getModulesWithADFTests() {
+  return [
+    'apps/learning/java/learning-core',
+    'apps/learning/standard-modules/connectors/connector-interface-common',
+    'apps/learning/standard-modules/connectors/connector-user',
+    'apps/learning/standard-modules/connectors/connector-learninghistory',
+    'apps/learning/standard-modules/user-course-home/user-course-home-client',
+    'apps/learning/standard-modules/entity-manager/entity-manager-client',
+    'apps/learning/java/learning-business-modules/learning-external-api',
+    'apps/learning/java/learning-services/learning-systemmanagement-service/learning-systemmanagement-service-sit/learning-systemmanagement-service-sit-adf',
+    'apps/learning/standard-modules/eqb/eqb-client'
+  ]
+}
+
+def getModulesForADFRun() {
+  return [
+    'apps/learning/java/learning-core'
+  ]
+}
+
+private String getGradleWCommand() {
+  def gradleWrapperDir = file("$projectDir")
+  if (Os.isFamily(Os.FAMILY_WINDOWS)) {
+    return "$gradleWrapperDir/gradlew.bat"
+  } else {
+    return "$gradleWrapperDir/gradlew"
+  }
+}
+
+allprojects {
+  version = 'b2011.0.1' /* (ver-var: tms-version) */
+
+  repositories {
+    mavenLocal()
+    maven {
+      url "http://pe-mvn.plateau.internal/mavenrepo/internal"
+      content {
+        notForConfigurations("applicationTestRuntimeClasspath", "applicationTestCompileClasspath")
+      }
+    }
+    maven {
+      url "http://nexus.wdf.sap.corp:8081/nexus/content/repositories/build.releases.3rd-party"
+      content {
+        notForConfigurations("applicationTestRuntimeClasspath", "applicationTestCompileClasspath")
+      }
+    }
+    maven {
+      url "http://pe-mvn.plateau.internal/mavenrepo/central"
+      content {
+        notForConfigurations("applicationTestRuntimeClasspath", "applicationTestCompileClasspath")
+      }
+    }
+    maven {
+      url "https://artifactory.successfactors.com/artifactory/sfmodules"
+      content {
+        notForConfigurations("applicationTestRuntimeClasspath", "applicationTestCompileClasspath")
+      }
+    }
+    maven {
+      url "https://artifactory.successfactors.com/artifactory/thirdparty-libs"
+      content {
+        notForConfigurations("applicationTestRuntimeClasspath", "applicationTestCompileClasspath")
+      }
+    }
+
+    maven {
+      url "https://artifactory.successfactors.com/artifactory"
+      content {
+        notForConfigurations("applicationTestRuntimeClasspath", "applicationTestCompileClasspath")
+      }
+    }
+
+
+  }
+
+  compileJava {
+    options.encoding = 'UTF-8'
+    options.compilerArgs += '-proc:none'
+    options.warnings = false
+  }
+
+  compileTestJava {
+    options.encoding = 'UTF-8'
+    options.compilerArgs += '-proc:none'
+    options.warnings = false
+  }
+
+  dependencies {
+    testImplementation group: 'junit', name: 'junit', version: '4.12'
+  }
+
+  buildDir = 'target'
+
+  jar {
+    destinationDir = file('target')
+  }
+
+  test {
+    maxParallelForks = (Runtime.runtime.availableProcessors() / 2) + 1
+    //Number of parallel processes for test execution.
+  }
+
+  /* Clean All Projects */
+  task allClean(type: MavenExec) {
+    goals 'clean'
+    doLast {
+      println "Finished All Clean : $projectDir"
+    }
+  }
+
+  /* Plateau Common Gradle Tasks */
+  task installPlateaucommon2(type: Exec) {
+    description = "Builds all Plateau Common Modules"
+    workingDir file("$projectDir/common/java/plateaucommon2")
+    commandLine getGradleWCommand()
+    args 'build', 'install'
+  }
+
+  /* Learning Core Gradle Tasks */
+  task installLearningCore(dependsOn: ['installLearningFrameworks', 'installLearningServices_WithoutDependingOnLearningCore'], type: Exec) {
+    workingDir file("$projectDir/apps/learning/java/learning-core")
+    commandLine getGradleWCommand()
+    args 'build', 'install'
+  }
+
+  task installLearningCoreClient(dependsOn: 'installLearningCore', type: Exec) {
+    workingDir file("$projectDir/apps/learning/java/learning-core-client")
+    commandLine getGradleWCommand()
+    args 'build', 'install'
+  }
+
+
+  task installLearningCoreWithoutDependencies(type: Exec) {
+    def applicationDir = file("$projectDir/apps/learning/java/learning-core")
+    workingDir applicationDir
+    commandLine getGradleWCommand()
+    args 'build', 'install'
+  }
+
+  /* Maven Tasks to Install POMS*/
+  task installSuperPOM(type: MavenExec) {
+    workingDir file("$projectDir/super-pom")
+    goals 'clean', 'install'
+  }
+  task installRootParentPOM(type: MavenExec) {
+    workingDir file("$projectDir/root-parent")
+    goals 'clean', 'install'
+  }
+
+  task installJavaParentPOM(type: MavenExec) {
+    workingDir file("$projectDir/apps/learning/java/java-parent")
+    goals 'clean', 'install'
+  }
+  task installAutomationParentPOM(type: MavenExec) {
+    workingDir file("$projectDir/automation/automation-parent")
+    goals 'clean', 'install'
+  }
+  task installLearningParentPOM(type: MavenExec) {
+    workingDir file("$projectDir/apps/learning/learning-parent")
+    goals 'clean', 'install'
+  }
+  task installAppsParentPOM(type: MavenExec) {
+    workingDir file("$projectDir/apps/apps-parent")
+    goals 'clean', 'install'
+  }
+  task installCommonParentPOM(type: MavenExec) {
+    workingDir file("$projectDir/common/common-parent")
+    goals 'clean', 'install'
+  }
+
+  task installParentPOMs() {
+    dependsOn 'installSuperPOM'
+    dependsOn 'installRootParentPOM'
+    dependsOn 'installJavaParentPOM'
+    dependsOn 'installAutomationParentPOM'
+    dependsOn 'installLearningParentPOM'
+    dependsOn 'installAppsParentPOM'
+    dependsOn 'installCommonParentPOM'
+  }
+
+
+
+  /*  Java Tasks */
+  task installJavaModules(dependsOn: ['installPlateaucommon2', 'installParentPOMs'], type: Exec) {
+    workingDir file("$projectDir/apps/learning/java/modules")
+    commandLine getGradleWCommand()
+    args 'build', 'install'
+  }
+
+  task installLearningFrameworks(dependsOn: 'installJavaModules', type: Exec) {
+    workingDir file("$projectDir/apps/learning/java/learning-frameworks")
+    commandLine getGradleWCommand()
+    args 'build', 'install'
+  }
+
+  task installLearningAssetService_WithoutLearningCoreDependencies(dependsOn: ['installPlateaucommon2', 'installLearningFrameworks'], type: Exec) {
+    workingDir file("$projectDir/apps/learning/java/learning-services/learning-assets-service/learning-assets-service-api")
+    commandLine getGradleWCommand()
+    args 'build', 'install'
+  }
+
+  task installLearningFinanceService_WithoutLearningCoreDependencies(dependsOn: ['installPlateaucommon2', 'installLearningFrameworks'], type: Exec) {
+    workingDir file("$projectDir/apps/learning/java/learning-services/learning-finance-service/learning-finance-service-api")
+    commandLine getGradleWCommand()
+    args 'build', 'install'
+  }
+
+  task installLearningDiscoveryService_WithoutLearningCoreDependencies(dependsOn: ['installPlateaucommon2', 'installLearningFrameworks'], type: Exec) {
+    workingDir file("$projectDir/apps/learning/java/learning-services/learning-discovery-service/learning-discovery-service-api")
+    commandLine getGradleWCommand()
+    args 'build', 'install'
+  }
+
+  task installLearningLearnerService_WithoutLearningCoreDependencies(dependsOn: ['installPlateaucommon2', 'installLearningFrameworks'], type: Exec) {
+    workingDir file("$projectDir/apps/learning/java/learning-services/learning-learner-service/learning-learner-service-api")
+    commandLine getGradleWCommand()
+    args 'build', 'install'
+  }
+
+  task installLearningServices_WithoutDependingOnLearningCore() {
+    dependsOn 'installLearningAssetService_WithoutLearningCoreDependencies'
+    dependsOn 'installLearningFinanceService_WithoutLearningCoreDependencies'
+    dependsOn 'installLearningDiscoveryService_WithoutLearningCoreDependencies'
+    dependsOn 'installLearningLearnerService_WithoutLearningCoreDependencies'
+  }
+
+  task installLearningServices_WithLearningCoreDependencies(dependsOn: ['installLearningCore'], type: Exec) {
+    workingDir file("$projectDir/apps/learning/java/learning-services")
+    commandLine getGradleWCommand()
+    args 'build', 'install'
+  }
+
+  task installLearningBusinessModules(dependsOn: ['installLearningCore', 'installLearningServices_WithLearningCoreDependencies'
+                                                  , 'installDBScripts2', 'installLearningCoreClient'], type: Exec) {
+    workingDir file("$projectDir/apps/learning/java/learning-business-modules")
+    commandLine getGradleWCommand()
+    args 'build', 'install'
+  }
+
+  task installStandardModules(dependsOn: ['installLearningBusinessModules', 'installUserCourseHome'], type: Exec) {
+    workingDir file("$projectDir/apps/learning/standard-modules")
+    commandLine getGradleWCommand()
+    args 'build', 'install'
+  }
+
+  /* SapUI5 Tasks */
+  task installSFModules(type: MavenExec) {
+    workingDir file("$projectDir/apps/learning/sf-modules")
+    goals 'clean', 'install'
+/*    options {
+      threads = '1C'
+    }*/ //This seem to cause issues
+  }
+
+  task installSapui5Modules(dependsOn: 'installSFModules', type: MavenExec) {
+    workingDir file("$projectDir/apps/learning/sapui5-modules")
+    goals 'clean', 'install'
+  }
+
+  task installDBScripts2(dependsOn: ['installPlateaucommon2'], type: MavenExec) {
+    workingDir file("$projectDir/apps/learning/learning-db-scripts2")
+    goals 'clean', 'install'
+    options {
+      threads = '1C'
+    }
+  }
+
+  task installDBScriptsBundle(dependsOn: ['installDBScripts2', 'installParentPOMs'], type: MavenExec) {
+    workingDir file("$projectDir/apps/learning/learning-db-scripts-bundle")
+    goals 'clean', 'install'
+    options {                                                                                       
+      threads = '1C'
+    }
+  }
+
+  /* Learning Web */
+  task installLearningWeb(dependsOn: [ 'installSapui5Modules', 'installOfflinePlayer'
+                                       , 'installPQE', 'installStandardModules'
+                                       ,  'installDBScriptsBundle', 'installParentPOMs'], type: MavenExec) {
+    workingDir file("$projectDir/apps/learning/learning-web")
+    goals 'clean', 'install'
+    options {
+      threads = '1C'
+    }
+  }
+
+ 
+
+  /* Offline Player */
+  task installOfflinePlayer(dependsOn: ['installPlateaucommon2', 'installFoundationServer','installLearningServices_WithLearningCoreDependencies'], type: MavenExec) {
+    workingDir file("$projectDir/apps/offline-player")
+    goals 'clean', 'install'
+    options {
+      threads = '1C'
+    }
+  }
+
+  /* PQE */
+  task installPQE(type: MavenExec) {
+    workingDir file("$projectDir/apps/pqe")
+    goals 'clean', 'install'
+    options {
+      threads = '1C'
+    }
+  }
+
+  task installUserCourseHome(type: Exec){
+    workingDir file("$projectDir/apps/learning/standard-modules/user-course-home/")
+    commandLine getGradleWCommand()
+    args 'build', 'install'
+  }
+
+  /* Automation Projects*/
+  task installAutomationFramework(type: Exec) {
+    workingDir file("$projectDir/automation/framework")
+    commandLine getGradleWCommand()
+    args 'build', 'install'
+  }
+
+  task installAutomation(dependsOn: 'installLearningWeb', type: Exec) {
+    workingDir file("$projectDir/automation")
+    commandLine getGradleWCommand()
+    args 'build', 'install'
+  }
+
+  /* Tools Projects */
+  task installToolsApps(dependsOn: ['installPlateaucommon2', 'installDBScripts2'], type: MavenExec) {
+    workingDir file("$projectDir/apps/tools/")
+    goals 'clean', 'install'
+    options {
+      threads = '1C'
+    }
+  }
+
+  /* Teamcity Packaging */
+  task installPackaging(dependsOn: ['installFoundationServer', 'installAutomation', 'installSupport', 'installToolsApps'], type: MavenExec) {
+    workingDir file("$projectDir/packaging")
+    goals 'clean', 'install'
+  }
+
+  task installFoundationServer(type: MavenExec) {
+    workingDir file("$projectDir/plateau-foundation-server")
+    goals 'clean', 'install'
+  }
+
+  /* Support Projects */
+  task installSupport(dependsOn: 'installLearningWeb', type: MavenExec) {
+    workingDir file("$projectDir/support")
+    goals 'clean', 'install'
+    options {
+      threads = '1C'
+    }
+  }
+
+  /* Compile ADF 'applicationTest' Sources to Check for Errors */
+  task compileADFTests() {
+    dependsOn installLearningFrameworks
+
+    group 'ADF'
+    description 'Compiles all ADF applicationTest modules and publishes resulting JARs'
+
+    // Compile 'applicationTest' source in 'learning-framework-adf' to check for errors
+    // NOTE: The main source of learning-framework-adf is already published as part of the main build
+    def adfModulePath = 'apps/learning/java/learning-frameworks/learning-framework-adf'
+    doFirst {
+      exec {
+        logger.quiet("Compiling 'applicationTest' source for '{}'", adfModulePath)
+        workingDir file("$projectDir/$adfModulePath")
+        commandLine getGradleWCommand()
+        args 'compileApplicationTestJava'
+      }
+    }
+
+    // Build and publish 'applicationTest' source in other modules to check for errors
+    // NOTE: The applicationTest JARs are published due to applicationTest interdependencies
+    getModulesWithADFTests().each { modulePath ->
+      doLast {
+        exec {
+          logger.quiet("Compiling 'applicationTest' source for '{}'", modulePath)
+          workingDir file("$projectDir/$modulePath")
+          commandLine getGradleWCommand()
+          args 'clean', 'publishToMavenLocal', '-x', 'publishPluginMavenPublicationToMavenLocal', '-x', 'test', '--quiet'
+        }
+      }
+    }
+
+    // NOTE: The following step is temporary until the ADF test execution is integrated into builds
+    // Perform 'selectiveApplicationTest' for all modules to detect Cucumber-related errors
+    getModulesWithADFTests().each { modulePath ->
+      doLast {
+        exec {
+          logger.quiet("Performing 'selectiveApplicationTest' for '{}'", modulePath)
+          workingDir file("$projectDir/$modulePath")
+          commandLine getGradleWCommand()
+          args 'selectiveApplicationTest', '-DjvmArgs=-Xmx4g'
+        }
+      }
+    }
+  }
+
+  task publishADFTests() {
+    dependsOn compileADFTests
+
+    group = 'ADF'
+    description = 'Publishes ADF test images to the Docker repository for execution by AEP'
+
+    // Use parameters passed as project properties (i.e. using -P command-line args) if provided;
+    // otherwise, read from the corresponding system environment variable.
+
+    def adfHostname       = project.hasProperty('adfHostname')       ? adfHostname       : System.getenv('ADF_HOSTNAME')
+    def adfApiHostname    = project.hasProperty('adfApiHostname')    ? adfApiHostname    : System.getenv('ADF_API_HOSTNAME')
+    def adfClientId       = project.hasProperty('adfClientId')       ? adfClientId       : System.getenv('ADF_CLIENT_ID')
+    def adfDockerRepoUser = project.hasProperty('adfDockerRepoUser') ? adfDockerRepoUser : System.getenv('ADF_DOCKER_REPO_USER')
+    def adfDockerRepoPass = project.hasProperty('adfDockerRepoPass') ? adfDockerRepoPass : System.getenv('ADF_DOCKER_REPO_PASS')
+
+    // TODO: Fail if docker repo user/pass not specified
+    //if (adfDockerRepoUser == null || adfDockerRepoPass == null) {
+    //}
+
+    // Build and publish 'applicationTest' source in other modules to check for errors
+    // NOTE: The applicationTest JARs are published due to applicationTest interdependencies
+    // TODO: Temporarily using a separate module list for test runs. Later, we'' revert the code to use the main list.
+    //getModulesWithADFTests().each { modulePath ->
+    getModulesForADFRun().each { modulePath ->
+      def resourcesPath = 'src/applicationTest/resources'
+
+      logger.quiet("## Publishing ADF tests for '{}'", modulePath)
+
+      doLast {
+        logger.quiet("### Updating ADF configuration files for '{}'", modulePath)
+
+        if (adfHostname != null) {
+          ant.propertyfile(file: "$projectDir/$modulePath/$resourcesPath/config/engcd/environment.properties") {
+            entry(key: 'hostname', value: adfHostname)
+          }
+        }
+
+        if (adfApiHostname != null) {
+          ant.propertyfile(file: "$projectDir/$modulePath/$resourcesPath/config/engcd/api.properties") {
+            entry(key: 'apihostname', value: adfApiHostname)
+          }
+        }
+
+        if (adfClientId != null) {
+          ant.propertyfile(file: "$projectDir/$modulePath/$resourcesPath/config/engcd/lms_environment.properties") {
+            entry(key: 'clientId', value: adfClientId)
+          }
+        }
+      }
+
+      doLast {
+        logger.quiet("### Build and publish Docker image for '{}'", modulePath)
+        exec {
+          workingDir file("$projectDir/$modulePath")
+          commandLine getGradleWCommand()
+          args 'pushApplicationTestImage', '-DdockerRepoUser=$adfDockerRepoUser', '-DdockerRepoPassword=$adfDockerRepoPass', '-DapplicationTestBranch=trunk', '-DapplicationTestImageRevision=latest', '-DjvmArgs=-Xmx4g', '--info'
+        }
+      }
+    }
+  }
+
+  task runADFTestsSingleModule(type: RunADFTestsSingleModuleTask) {
+    group 'ADF'
+    description 'Runs ADF tests using AEP for a single module'
+
+    buildTimestamp = (new Date()).format('yyyy-MM-dd HH:mm')
+  }
+
+  task runADFTestsMultipleModule(type: RunADFTestsMultipleModulesTask) {
+    group 'ADF'
+    description 'Runs ADF tests using AEP for multiple modules'
+
+    buildTimestamp = (new Date()).format('yyyy-MM-dd HH:mm')
+    modulePaths = getModulesForADFRun()
+  }
+
+  task generateADFCatalog(type: GenerateADFCatalogTask) {
+    group 'ADF'
+    description 'Generates a HTML-based catalog of ADF-related assets (i.e. Steps, Tasks, Actions)'
+
+    modulePaths = getModulesWithADFTests()
+  }
+
+  task fullBuild() {
+    dependsOn 'installParentPOMs'
+    dependsOn 'installPlateaucommon2'
+    dependsOn 'installLearningBusinessModules'
+    dependsOn 'installLearningServices_WithLearningCoreDependencies'
+    dependsOn 'installSapui5Modules'
+    dependsOn 'installStandardModules'
+    dependsOn 'installLearningWeb'
+    dependsOn 'installOfflinePlayer'
+    dependsOn 'installPQE'
+    dependsOn 'installAutomation'
+    dependsOn 'installPackaging'
+    dependsOn 'installFoundationServer'
+    dependsOn 'installSupport'
+    dependsOn 'compileADFTests'
+  }
+
+  task jenkinsFullBuild(dependsOn: ['ciSetup', 'fullBuild']) {
+    doLast {
+      println "Finished Jenkins Full Build"
+    }
+  }
+
+  task ciSetup(dependsOn: ['updateBuildTimeInDBScripts', 'appendRevisionToVersionTxt']) {
+    doLast {
+      println "CI Setup is Done"
+    }
+  }
+
+  task updateBuildTimeInDBScripts() {
+    doFirst {
+      println "Updating build time in PatchVersion.properties in Full DB scripts"
+      ant.replace(file: "$projectDir/apps/learning/learning-db-scripts2/src/main/resources/fulldatabase/upgrade/PatchVersion.properties", token: "FULL_DB_REVISION", value: "${getBuildStartTime()}")
+      println "Updating build time in PatchVersion.properties in Patch scripts"
+      ant.replace(file: "$projectDir/apps/learning/learning-db-scripts2/src/main/resources/patch/${getbuildVersionWithoutMinorVersion()}.1/upgrade/PatchVersion.properties", token: "FULL_DB_REVISION", value: "${getBuildStartTime()}")
+      ant.delete(dir: "$projectDir/apps/learning/learning-db-scripts2/src/main/resources/fulldatabase/upgrade/temp")
+    }
+  }
+
+  /* Updates versions.txt file with timestamp */
+  task appendRevisionToVersionTxt(type: Exec) {
+    workingDir "$projectDir/dist/cm-tools"
+    commandLine './tempGetLPRev.sh'
+    args version
+  }
+
+}

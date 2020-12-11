@@ -1,0 +1,14 @@
+buildscript {
+  apply from: "gradle/scripts/repositories.gradle", to: buildscript
+  repositories {
+    maven {
+      url "http://nexus.wdf.sap.corp:8081/nexus/content/repositories/build.releases.3rd-party"
+    }
+  }
+  dependencies {
+    // Dependencies specified in buildscript block are visible to subprojects
+    classpath 'com.successfactors.buildsystem:gbs-buildscan:b2011.0.7'
+  }
+}
+
+apply plugin: 'gbs-build-scan'
